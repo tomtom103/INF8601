@@ -1,0 +1,170 @@
+#!/bin/sh
+#-*-Scheme-*-
+exec guile3.0 --no-auto-compile -e main -s "$0" "$@"
+!#
+
+(use-modules
+ (ice-9 control)
+ (ice-9 exceptions)
+ (ice-9 match)
+ (ice-9 format)
+ (ice-9 textual-ports)
+ (srfi srfi-9)
+ (srfi srfi-9 gnu)
+ (rnrs bytevectors))
+
+(define-record-type <endpoint>
+  (make-endpoint% host port)
+  endpoint?
+  (host endpoint-host)
+  (port endpoint-port))
+
+(set-record-type-printer!
+    <endpoint>
+  (lambda (endpoint port)
+    (format port "~a:~a"
+            (hostent:name (endpoint-host endpoint))
+            (endpoint-port endpoint))))
+
+(define (make-endpoint name port)
+  (make-endpoint% (gethost name) port))
+
+(define (default-server-endpoint)
+  (apply make-endpoint
+         (let ((user-addr (getenv "HANDOUT_SERVER")))
+           (if user-addr
+               (match (string-split user-addr #\:)
+                 ((addr port) (list addr (string->number port)))
+                 (_ (raise-exception
+                     (make-exception
+                      (make-external-error)
+                      (make-exception-with-irritants user-addr)
+                      (make-exception-with-message "Invalid server.")))))
+               (list "132.207.72.24" 8083)))))
+
+
+(define* (open-connection #:optional (endpoint (default-server-endpoint)))
+  (let ((host (endpoint-host endpoint))
+        (sock (socket PF_INET SOCK_STREAM 0)))
+    (let/ec return
+      (for-each
+       (lambda (addr)
+         (and
+          (false-if-exception
+           (connect sock
+                    (hostent:addrtype host)
+                    addr
+                    (endpoint-port endpoint)))
+          (return sock)))
+       (hostent:addr-list host))
+      (raise-exception
+       (make-exception
+        (make-external-error)
+        (make-exception-with-message
+         (format #f "Can't connect to server ~a" endpoint)))))))
+
+(define (send-request port . args)
+  (put-string port (string-join args " " 'infix))
+  (newline port))
+
+(define (recv-response client)
+  (let ((line (get-line client)))
+    (if (string? line)
+        (string-split line #\space)
+        line)))
+
+(define (handle-response server)
+  (let lp ((response (recv-response server)))
+    (unless (eof-object? response)
+      (match response
+        (("print")
+         (let lp ((line (get-line server)))
+           (unless (eof-object? line)
+             (display line)
+             (newline)
+             (lp (get-line server)))))
+        (("recvfile" name size)
+         (format (current-output-port)
+                 "Receiving file ~a\n" name)
+         (call-with-output-file name
+           (lambda (file)
+             (sendfile file server (string->number size)))
+           #:binary #t))
+        (("sendfile" name size)
+         (format (current-output-port)
+                 "Sendfile file ~a\n" name)
+         (call-with-input-file name
+           (lambda (file)
+             (sendfile server file (string->number size)))
+           #:binary #t))
+        (_
+         (raise-exception
+          (make-exception
+           (make-external-error)
+           (make-exception-with-irritants response)
+           (make-exception-with-message
+            "Invalid response from server")))))
+      (lp (recv-response server)))))
+
+(define (run-command . args)
+  (let ((port (open-connection)))
+    (apply send-request port args)
+    (handle-response port)))
+
+(define (submit token archive)
+  (let* ((server (open-connection))
+         (size (stat:size (stat archive))))
+    (send-request server "submit" token (number->string size))
+    (call-with-input-file archive
+      (lambda (port)
+        (sendfile server port size)))
+    (handle-response server)))
+
+(define (help)
+  (format #t "\
+Usage: ~a COMMAND ARGS...
+
+COMMAND must be one of the sub-commands listed below:
+
+cancel TOKEN                       cancel computation of last submission
+fetch TOKEN                        download work for team with TOKEN
+help                               print this message
+list                               list informations about available works
+result TOKEN                       print results of team with TOKEN
+status TOKEN                       print status of current computation of team with TOKEN
+submit TOKEN ARCHIVE               submit ARCHIVE of team with TOKEN for evaluation
+teamup WORK ID1 [ID2]              create a new team for WORK
+" (car (program-arguments)))
+  (primitive-exit EXIT_SUCCESS))
+
+(define (cry-for-help)
+  (let ((prog (car (program-arguments))))
+    (format #t "\
+~a: missing command name
+Try `~a help' for more information.
+" prog prog)
+    (primitive-exit EXIT_FAILURE)))
+
+(define (main args)
+  (add-to-load-path (getcwd))
+  (with-exception-handler
+      (lambda (exn)
+        (print-exception (current-error-port)
+                         #f
+                         (exception-kind exn)
+                         (exception-args exn))
+        (primitive-exit EXIT_FAILURE))
+    (lambda ()
+      (match (cdr args)
+        (("cancel" token) (run-command "cancel" token))
+        (("help") (help))
+        (("submit" token archive) (submit token archive))
+        (("fetch" token) (run-command "fetch" token))
+        (("list") (run-command "list"))
+        (("result" token) (run-command "result" token))
+        (("status" token) (run-command "status" token))
+        (("teamup" work . ids) (apply run-command "teamup" work ids))
+        ((_ . rest) (help))
+        (_ (cry-for-help))))))
+
+
