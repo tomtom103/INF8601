@@ -1,0 +1,8 @@
+{
+    "cmake.sourceDirectory": "${workspaceFolder}/tp1",
+    "files.associations": {
+        "queue.h": "c",
+        "pipeline.h": "c",
+        "filter.h": "c"
+    }
+}
