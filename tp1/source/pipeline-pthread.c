@@ -11,6 +11,7 @@
 
 queue_t *scale_up_queue, *sharpen_queue, *sobel_queue, *save_queue;
 pthread_mutex_t mutex;
+bool complete = false;
 
 void* read_all_images(void* args) {
 	image_dir_t* image_dir = (image_dir_t*) args;
@@ -27,6 +28,7 @@ void* read_all_images(void* args) {
 void* scale_up(void* args) {
 	image_t* image = (image_t*) queue_pop(scale_up_queue);
 	if (image == NULL) {
+		queue_push(scale_up_queue, NULL);
 		queue_push(sharpen_queue, NULL);
 		return NULL;
 	}
@@ -38,6 +40,7 @@ void* scale_up(void* args) {
 void* sharpen(void* args) {
 	image_t* image = (image_t*) queue_pop(sharpen_queue);
 	if (image == NULL) {
+		queue_push(sharpen_queue, NULL);
 		queue_push(sobel_queue, NULL);
 		return NULL;
 	}
@@ -49,6 +52,7 @@ void* sharpen(void* args) {
 void* sobel(void* args) {
 	image_t* image = (image_t*) queue_pop(sobel_queue);
 	if (image == NULL) {
+		queue_push(sobel_queue, NULL);
 		queue_push(save_queue, NULL);
 		return NULL;
 	}
@@ -61,11 +65,14 @@ void* save_all_images(void* args) {
 	image_dir_t* image_dir = (image_dir_t*) args;
 	image_t* image = (image_t*) queue_pop(save_queue);
 	if (image == NULL) {
-		exit(-1);
+		pthread_mutex_lock(&mutex);
+		complete = true;
+		pthread_mutex_unlock(&mutex);
+		return NULL;
 	}
-	pthread_mutex_lock(&mutex);
+	// pthread_mutex_lock(&mutex);
 	image_dir_save(image_dir, image);
-	pthread_mutex_unlock(&mutex);
+	// pthread_mutex_unlock(&mutex);
 	printf(".");
 	fflush(stdout);
 	image_destroy(image);
@@ -73,6 +80,7 @@ void* save_all_images(void* args) {
 
 void process_images(image_dir_t* image_dir) {
 	pthread_t threads[4][NUM_THREADS];
+	bool done = false;
 
 	while (1) {
 		for(int i = 0; i < NUM_THREADS; i++) {
@@ -91,11 +99,13 @@ void process_images(image_dir_t* image_dir) {
 		for(int j = 0; j < 4; j++) {
 			for(int i = 0; i < NUM_THREADS; i++) {
 				int rc = pthread_join(threads[j][i], NULL);
-				if(j==3) {
-					if (rc == -1) {
-						return;
-					}
+				pthread_mutex_lock(&mutex);
+				if(complete) {
+					pthread_mutex_unlock(&mutex);
+
+					return;
 				}
+				pthread_mutex_unlock(&mutex);
 			}
 		}
 

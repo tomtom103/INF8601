@@ -74,7 +74,7 @@ int pipeline_tbb(image_dir_t* image_dir) {
         tbb::make_filter<image_t*, image_t*>(tbb::filter::parallel, TBBScaleUp()) &
         tbb::make_filter<image_t*, image_t*>(tbb::filter::parallel, TBBSharpen()) &
         tbb::make_filter<image_t*, image_t*>(tbb::filter::parallel, TBBSobel()) &
-        tbb::make_filter<image_t*, void>(tbb::filter::serial, TBBSave(image_dir))
+        tbb::make_filter<image_t*, void>(tbb::filter::parallel, TBBSave(image_dir))
     );
     return 0;
 }
