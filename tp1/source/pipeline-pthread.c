@@ -6,64 +6,73 @@
 #include "pipeline.h"
 #include "queue.h"
 
-#define NUM_THREADS 16
+#define NUM_STEPS 4
+#define NUM_PARALLEL_THREADS 8
+#define NUM_QUEUES 4
 #define QUEUE_SIZE 400
 
-queue_t *scale_up_queue, *sharpen_queue, *sobel_queue, *save_queue;
+
+// Global variables
+queue_t **queues;
 pthread_mutex_t mutex;
 bool complete = false;
 
 void* read_all_images(void* args) {
 	image_dir_t* image_dir = (image_dir_t*) args;
+	printf("Reading images from %s\n", image_dir->input_dir_name);
 
 	while (1) {
 		image_t* image = image_dir_load_next(image_dir);
-		queue_push(scale_up_queue, image);
+		queue_push(queues[0], image);
 		if (image == NULL) {
 			break;
 		}
 	}
+	return 0;
 }
 
 void* scale_up(void* args) {
-	image_t* image = (image_t*) queue_pop(scale_up_queue);
+	image_t* image = (image_t*) queue_pop(queues[0]);
 	if (image == NULL) {
-		queue_push(scale_up_queue, NULL);
-		queue_push(sharpen_queue, NULL);
+		queue_push(queues[0], NULL);
+		queue_push(queues[1], NULL);
 		return NULL;
 	}
 	image_t* modified = filter_scale_up(image, 2);
 	image_destroy(image);
-	queue_push(sharpen_queue, modified);
+	queue_push(queues[1], modified);
+	return 0;
 }
 
 void* sharpen(void* args) {
-	image_t* image = (image_t*) queue_pop(sharpen_queue);
+	image_t* image = (image_t*) queue_pop(queues[1]);
 	if (image == NULL) {
-		queue_push(sharpen_queue, NULL);
-		queue_push(sobel_queue, NULL);
+		queue_push(queues[1], NULL);
+		queue_push(queues[2], NULL);
 		return NULL;
 	}
 	image_t* modified = filter_sharpen(image);
 	image_destroy(image);
-	queue_push(sobel_queue, modified);
+	queue_push(queues[2], modified);
+	return 0;
 }
 
 void* sobel(void* args) {
-	image_t* image = (image_t*) queue_pop(sobel_queue);
+	image_t* image = (image_t*) queue_pop(queues[2]);
 	if (image == NULL) {
-		queue_push(sobel_queue, NULL);
-		queue_push(save_queue, NULL);
+		queue_push(queues[2], NULL);
+		queue_push(queues[3], NULL);
 		return NULL;
 	}
 	image_t* modified = filter_sobel(image);
 	image_destroy(image);
-	queue_push(save_queue, modified);
+	queue_push(queues[3], modified);
+	return 0;
 }
 
 void* save_all_images(void* args) {
-	image_dir_t* image_dir = (image_dir_t*) args;
-	image_t* image = (image_t*) queue_pop(save_queue);
+	image_dir_t *image_dir = (image_dir_t*) args;
+	image_t* image = (image_t*) queue_pop(queues[3]);
 	if (image == NULL) {
 		pthread_mutex_lock(&mutex);
 		complete = true;
@@ -76,62 +85,53 @@ void* save_all_images(void* args) {
 	printf(".");
 	fflush(stdout);
 	image_destroy(image);
-}
-
-void process_images(image_dir_t* image_dir) {
-	pthread_t threads[4][NUM_THREADS];
-	bool done = false;
-
-	while (1) {
-		for(int i = 0; i < NUM_THREADS; i++) {
-			pthread_create(&threads[0][i], NULL, scale_up, NULL);
-		}
-		for(int i = 0; i < NUM_THREADS; i++) {
-			pthread_create(&threads[1][i], NULL, sharpen, NULL);
-		}
-		for(int i = 0; i < NUM_THREADS; i++) {
-			pthread_create(&threads[2][i], NULL, sobel, NULL);
-		}
-		for(int i = 0; i < NUM_THREADS; i++) {
-			pthread_create(&threads[3][i], NULL, save_all_images, image_dir);
-		}
-		
-		for(int j = 0; j < 4; j++) {
-			for(int i = 0; i < NUM_THREADS; i++) {
-				int rc = pthread_join(threads[j][i], NULL);
-				pthread_mutex_lock(&mutex);
-				if(complete) {
-					pthread_mutex_unlock(&mutex);
-
-					return;
-				}
-				pthread_mutex_unlock(&mutex);
-			}
-		}
-
-	}
+	return 0;
 }
 
 int pipeline_pthread(image_dir_t* image_dir) {
-	pthread_mutex_init(&mutex, NULL);
+	// Allocate resources
+	if(pthread_mutex_init(&mutex, NULL) != 0) {
+		printf("Mutex init failed\n");
+		return 1;
+	}
+	queues = calloc(NUM_QUEUES, sizeof(queue_t*));
+	for(int i = 0; i < NUM_QUEUES; i++) {
+		queues[i] = queue_create(QUEUE_SIZE);
+	}
+	pthread_t read_tid;
+	pthread_create(&read_tid, NULL, read_all_images, image_dir);
 
-	scale_up_queue = queue_create(QUEUE_SIZE);
-	sharpen_queue = queue_create(QUEUE_SIZE);
-	sobel_queue = queue_create(QUEUE_SIZE);
-	save_queue = queue_create(QUEUE_SIZE);
+	pthread_t tids[NUM_PARALLEL_THREADS][NUM_STEPS] = {0};
+	while (!complete) {
+		for(int i = 0; i < NUM_PARALLEL_THREADS; i++) {
+			if (queues[0]->used > 0) {
+				pthread_create(&tids[i][0], NULL, scale_up, NULL);
+			}
+			if (queues[1]->used > 0) {
+				pthread_create(&tids[i][1], NULL, sharpen, NULL);
+			}
+			if (queues[2]->used > 0) {
+				pthread_create(&tids[i][2], NULL, sobel, NULL);
+			}
+			if (queues[3]->used > 0) {
+				pthread_create(&tids[i][3], NULL, save_all_images, image_dir);
+			}
+		}
 
-	pthread_t read_thread;
+		for(int i = 1; i < NUM_PARALLEL_THREADS; i++) {
+			for(int j = 0; j < NUM_STEPS; j++) {
+				if (queues[j]->used > 0 && tids[i][j] != 0) {
+					pthread_join(tids[i][j], NULL);
+				}
+			}
+		}
+	}
 
-	pthread_create(&read_thread, NULL, read_all_images, image_dir);
-
-	process_images(image_dir);
-
-	// Delete queues
-	queue_destroy(scale_up_queue);
-	queue_destroy(sharpen_queue);
-	queue_destroy(sobel_queue);
-	queue_destroy(save_queue);
-
+	// Free resources
+	for(int i = 0; i < NUM_QUEUES; i++) {
+		queue_destroy(queues[i]);
+	}
+	free(queues);
 	pthread_mutex_destroy(&mutex);
 	
 	return 0;
