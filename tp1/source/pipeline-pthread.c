@@ -8,7 +8,7 @@
 #include "log.h"
 
 #define NUM_STEPS 4
-#define NUM_PARALLEL_THREADS 4
+#define NUM_PARALLEL_THREADS 64
 #define NUM_QUEUES 4
 #define QUEUE_SIZE 500
 
@@ -47,9 +47,9 @@ void* scale_up(void* args) {
 	if(modified == NULL) {
 		exit(-1);
 	}
-	printf("Finished scaling image\n");
 	image_destroy(image);
 	queue_push(queues[1], modified);
+	return 0;
 }
 
 void* sharpen(void* args) {
@@ -62,9 +62,9 @@ void* sharpen(void* args) {
 	if(modified == NULL) {
 		exit(-1);
 	}
-	printf("Finished sharpening images\n");
 	image_destroy(image);
 	queue_push(queues[2], modified);
+	return 0;
 }
 
 void* sobel(void* args) {
@@ -77,9 +77,9 @@ void* sobel(void* args) {
 	if(modified == NULL) {
 		exit(-1);
 	}
-	printf("Finished sobel images\n");
 	image_destroy(image);
 	queue_push(queues[3], modified);
+	return 0;
 }
 
 void* save_all_images(void* args) {
@@ -92,9 +92,6 @@ void* save_all_images(void* args) {
 		pthread_mutex_unlock(&mutex);
 		return 0;
 	}
-	printf("Saving images\n");
-	printf(".");
-	fflush(stdout);
 	image_dir_save(image_dir, image);
 	image_destroy(image);
 	return 0;
