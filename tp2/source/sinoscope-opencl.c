@@ -44,11 +44,11 @@ int sinoscope_opencl_init(sinoscope_opencl_t* opencl, cl_device_id opencl_device
     cl_program program = clCreateProgramWithSource(opencl->context, 1, (const char**) &code, &size, &error);
     if (error != CL_SUCCESS) return -1;
     
-    error = clBuildProgram(program, 1, opencl->device_id, NULL, NULL, NULL);
+    error = clBuildProgram(program, 1, &(opencl->device_id), "-I " __OPENCL_INCLUDE__, NULL, NULL);
 
-    clGetProgramBuildInfo(program, opencl->device_id, CL_PROGRAM_BUILD_LOG)
+    clGetProgramBuildInfo(program, opencl->device_id, CL_PROGRAM_BUILD_LOG, 0, NULL, &size);
 
-    opencl->kernel = clCreateKernel(program, "sinoscope", &error);
+    opencl->kernel = clCreateKernel(program, "sinoscope_kernel", &error);
     if (error != CL_SUCCESS) LOG_ERROR("Error creating kernel: %i\n", (int)error);
 
 	return 0;
@@ -64,19 +64,18 @@ void sinoscope_opencl_cleanup(sinoscope_opencl_t* opencl)
 
 
 int sinoscope_image_opencl(sinoscope_t* sinoscope) {
-    LOG_ERROR("ALLO\n");
     if (sinoscope == NULL) {
         LOG_ERROR_NULL_PTR();
         goto fail_exit;
     }
     
-    cl_event event;
     cl_int error;
 
-    const size_t work_dim = sinoscope->width * sinoscope->height * 3U; 
+    const size_t size = 512;
+    const size_t work_dim = sinoscope->width * sinoscope->height; 
 
-    error = clSetKernelArg(sinoscope->opencl->kernel, 0, sinoscope->buffer_size, &sinoscope->buffer);
-    if(error != CL_SUCCESS) return -1;
+    error = clSetKernelArg(sinoscope->opencl->kernel, 0, sizeof(cl_mem), sinoscope->buffer);
+    if(error != CL_SUCCESS) LOG_ERROR("Error setting buffer arg: %i\n", (int)error);
 
     sinoscope_opencl_args_t args = {
         sinoscope->interval_inverse,
@@ -92,19 +91,19 @@ int sinoscope_image_opencl(sinoscope_t* sinoscope) {
         sinoscope->interval
     };
 
-    error = clSetKernelArg(sinoscope->opencl->kernel, 1, sizeof(args), &args);
-    if(error != CL_SUCCESS) return -1;
+    error = clSetKernelArg(sinoscope->opencl->kernel, 1, sizeof(cl_mem)*8, &args);
+    if(error != CL_SUCCESS) LOG_ERROR("Error setting struct args: %i\n", (int)error);
     
-    error = clEnqueueNDRangeKernel(sinoscope->opencl->queue, sinoscope->opencl->kernel, 2, 
-                                    NULL, &work_dim, NULL, 0, NULL, &event);
-    if(error != CL_SUCCESS)  return -1;
+    error = clEnqueueNDRangeKernel(sinoscope->opencl->queue, sinoscope->opencl->kernel, 1, 
+                                    NULL, &work_dim, &size, 0, NULL, NULL);
+    if(error != CL_SUCCESS) LOG_ERROR("Error in enqueue: %i\n", (int)error);
 
-    error = clFinish(sinoscope->opencl->queue);
-    if(error != CL_SUCCESS)  return -1;
+    // error = clFinish(sinoscope->opencl->queue);
+    // if(error != CL_SUCCESS)  LOG_ERROR("Error in finish: %i\n", (int)error);
 
     error = clEnqueueReadBuffer(sinoscope->opencl->queue, sinoscope->opencl->buffer, CL_TRUE,
-                                0, sizeof(cl_mem), sinoscope->buffer, 0, NULL, &event);
-    if(error != CL_SUCCESS)  return -1;
+                                0, sizeof(cl_mem), sinoscope->buffer, 0, NULL, NULL);
+    if(error != CL_SUCCESS)  LOG_ERROR("Error in read buffer: %i\n", (int)error);
 
     return 0;
 
