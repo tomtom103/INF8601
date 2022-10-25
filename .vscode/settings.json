@@ -1,9 +1,13 @@
 {
-    "cmake.sourceDirectory": "${workspaceFolder}/tp1",
+    "cmake.sourceDirectory": "${workspaceFolder}/tp2",
     "files.associations": {
         "queue.h": "c",
         "pipeline.h": "c",
         "filter.h": "c",
-        "assert.h": "c"
+        "assert.h": "c",
+        "headless.h": "c",
+        "time.h": "c",
+        "sinoscope.h": "c",
+        "opencl.h": "c"
     }
 }
