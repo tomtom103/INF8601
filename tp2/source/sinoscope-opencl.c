@@ -28,7 +28,7 @@ int sinoscope_opencl_init(sinoscope_opencl_t* opencl, cl_device_id opencl_device
 	
 	opencl->buffer = clCreateBuffer(opencl->context, 
         CL_MEM_READ_WRITE | CL_MEM_HOST_READ_ONLY, 
-        width * height * 3U, NULL, &error 
+        width * height * 9U, NULL, &error 
     );
 
     if (error != CL_SUCCESS) return -1;
@@ -95,16 +95,16 @@ int sinoscope_image_opencl(sinoscope_t* sinoscope) {
     error = clSetKernelArg(sinoscope->opencl->kernel, 1, sizeof(args), &args);
     if(error != CL_SUCCESS) LOG_ERROR("Error setting struct args: %i\n", (int)error);
 
-    error = clSetKernelArg(sinoscope->opencl->kernel, 2, sizeof(unsigned int), &sinoscope->width);
+    error = clSetKernelArg(sinoscope->opencl->kernel, 2, sizeof(cl_int), &sinoscope->width);
     if(error != CL_SUCCESS) LOG_ERROR("Error setting width arg: %i\n", (int)error);
 
-    error = clSetKernelArg(sinoscope->opencl->kernel, 3, sizeof(unsigned int), &sinoscope->height);
+    error = clSetKernelArg(sinoscope->opencl->kernel, 3, sizeof(cl_int), &sinoscope->height);
     if(error != CL_SUCCESS) LOG_ERROR("Error setting height arg: %i\n", (int)error);
 
-    error = clSetKernelArg(sinoscope->opencl->kernel, 4, sizeof(unsigned int), &sinoscope->taylor);
+    error = clSetKernelArg(sinoscope->opencl->kernel, 4, sizeof(cl_int), &sinoscope->taylor);
     if(error != CL_SUCCESS) LOG_ERROR("Error setting taylor arg: %i\n", (int)error);
 
-    error = clSetKernelArg(sinoscope->opencl->kernel, 5, sizeof(unsigned int), &sinoscope->interval);
+    error = clSetKernelArg(sinoscope->opencl->kernel, 5, sizeof(cl_int), &sinoscope->interval);
     if(error != CL_SUCCESS) LOG_ERROR("Error setting interval arg: %i\n", (int)error);
 
     const size_t global_work_size = sinoscope->buffer_size; 
