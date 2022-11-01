@@ -14,8 +14,8 @@ int sinoscope_image_openmp(sinoscope_t* sinoscope) {
     }
 
 	#pragma omp parallel for simd schedule(static, 1)
-    for (int i = 0; i < sinoscope->width; i++) {
-        for (int j = 0; j < sinoscope->height; j++) {
+    for (int j = 0; j < sinoscope->height; j++) {
+        for (int i = 0; i < sinoscope->width; i++) {
             float px    = sinoscope->dx * j - 2 * M_PI;
             float py    = sinoscope->dy * i - 2 * M_PI;
             float value = 0;
