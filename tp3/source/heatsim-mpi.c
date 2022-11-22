@@ -4,10 +4,6 @@
 #include "heatsim.h"
 #include "log.h"
 
-typedef struct grid_data {
-    double* data;
-} grid_data_t;
-
 MPI_Datatype create_grid_data_type(int width, int height) {
     int err;
     int lengths[1] = {width * height};
@@ -102,15 +98,21 @@ int heatsim_send_grids(heatsim_t* heatsim, cart2d_t* cart) {
     int err;
 
     for (int dest = 1; dest < heatsim->rank_count; dest++) {
-        int coords[2] = {
-            dest / cart->total_width,
-            dest % cart->total_width
-        };
+        // int coords[2] = {
+        //     dest / cart->total_width,
+        //     dest % cart->total_width
+        // };
 
+        int coords[2];
+        err = MPI_Cart_coords(heatsim->communicator, dest, 2, coords);
+        if (err != MPI_SUCCESS) {
+            LOG_ERROR("MPI_Cart_coords failed");
+            goto fail_exit;
+        }
         grid_t* grid = cart2d_get_grid(cart, coords[0], coords[1]);
 
         unsigned buffer[3] = {grid->width, grid->height, grid->padding};
-        err = MPI_Send(buffer, 3, MPI_UNSIGNED, dest, 0, MPI_COMM_WORLD);
+        err = MPI_Send(buffer, 3, MPI_UNSIGNED, dest, dest, heatsim->communicator);
         if (err != MPI_SUCCESS) {
             LOG_ERROR("MPI_Send width/height/padding failed");
             goto fail_exit;
@@ -118,14 +120,11 @@ int heatsim_send_grids(heatsim_t* heatsim, cart2d_t* cart) {
 
         MPI_Datatype grid_data_type = create_grid_data_type(grid->width, grid->height);
 
-        grid_data_t data = {grid->data};
-
-        err = MPI_Send(&data, 1, grid_data_type, dest, 0, MPI_COMM_WORLD);
+        err = MPI_Send(grid->data, 1, grid_data_type, dest, dest, heatsim->communicator);
         if (err != MPI_SUCCESS) {
             LOG_ERROR("MPI_Send grid_data_type failed");
             goto fail_exit;
         }
-        printf("%i\n", grid->width);
     }
     return 0;
 
@@ -147,7 +146,7 @@ grid_t* heatsim_receive_grid(heatsim_t* heatsim) {
 
     MPI_Status status;
     unsigned buffer[3];
-    err = MPI_Recv(buffer, 3, MPI_UNSIGNED, 0, 0, MPI_COMM_WORLD, &status);
+    err = MPI_Recv(buffer, 3, MPI_UNSIGNED, 0, heatsim->rank, heatsim->communicator, &status);
     if (err != MPI_SUCCESS) {
         LOG_ERROR("MPI_Recv width/height/padding failed");
         goto fail_exit;
@@ -157,19 +156,12 @@ grid_t* heatsim_receive_grid(heatsim_t* heatsim) {
 
     MPI_Datatype grid_data_type = create_grid_data_type(grid->width, grid->height);
 
-
-    grid_data_t* data = (grid_data_t*)malloc(sizeof(grid_data_t)*grid->width*grid->height);
-    // grid_data_t* data = NULL;
-    // changer le 1 pour la taille
-    LOG_ERROR("ALLO, %i", heatsim->rank);
-    err = MPI_Recv(data, 1, grid_data_type, 0, 0, MPI_COMM_WORLD, &status);  
+    err = MPI_Recv(grid->data, 1, grid_data_type, 0, heatsim->rank, heatsim->communicator, &status);  
     if (err != MPI_SUCCESS) {
         LOG_ERROR("MPI_Recv grid_data_type failed");
         goto fail_exit;
     }
 
-    printf("receive 2 %i", grid->height);
-    grid->data = data->data;
     return grid;
 
 fail_exit:
