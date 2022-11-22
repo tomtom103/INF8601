@@ -4,6 +4,13 @@
 #include "heatsim.h"
 #include "log.h"
 
+typedef struct grid_data {
+    double* data;
+} grid_data_t;
+
+MPI_Datatype grid_data_type;
+
+
 int heatsim_init(heatsim_t* heatsim, unsigned int dim_x, unsigned int dim_y) {
     /*
      * TODO: Initialiser tous les membres de la structure `heatsim`.
@@ -58,6 +65,23 @@ fail_exit:
     return -1;
 }
 
+void create_grid_data_type() {
+    int lengths[1] = {1};
+    MPI_Aint displacement[1];
+    MPI_Aint base_address;
+
+    grid_data_t grid_data;
+
+    MPI_Get_address(&grid_data, &base_address);
+    MPI_Get_address(&grid_data.data, &displacement[0]);
+
+    displacement[0] = MPI_Aint_diff(displacement[0], base_address);
+    MPI_Datatype types[1] = { MPI_DOUBLE };
+
+    MPI_Type_create_struct(1, lengths, displacement, types, &grid_data_type);
+    MPI_Type_commit(&grid_data_type);
+}
+
 int heatsim_send_grids(heatsim_t* heatsim, cart2d_t* cart) {
     /*
      * TODO: Envoyer toutes les `grid` aux autres rangs. Cette fonction
@@ -72,6 +96,27 @@ int heatsim_send_grids(heatsim_t* heatsim, cart2d_t* cart) {
      *       Utilisez `cart2d_get_grid` pour obtenir la `grid` à une coordonnée.
      */
 
+    int err;
+
+    create_grid_data_type();
+
+    for (int dest = 1; dest < heatsim->rank_count; dest++) {
+        grid_t* grid = cart2d_get_grid(cart, heatsim->coordinates[0] + dest, heatsim->coordinates[1] + dest);
+
+        unsigned buffer[3] = {grid->width, grid->height, grid->padding};
+        err = MPI_Send(buffer, 3, MPI_UNSIGNED, dest, MPI_ANY_TAG, heatsim->communicator);
+        if (err != MPI_SUCCESS) {
+            LOG_ERROR("MPI_Send width/height/padding failed");
+            goto fail_exit;
+        }
+
+        err = MPI_Send(grid, 1, grid_data_type, dest, MPI_ANY_TAG, heatsim->communicator);
+        if (err != MPI_SUCCESS) {
+            LOG_ERROR("MPI_Send grid_data_type failed");
+            goto fail_exit;
+        }
+    }
+
 fail_exit:
     return -1;
 }
@@ -85,6 +130,28 @@ grid_t* heatsim_receive_grid(heatsim_t* heatsim) {
      *
      *       Utilisez `grid_create` pour allouer le `grid` à retourner.
      */
+
+    int err;
+
+    MPI_Status status;
+    unsigned buffer[3];
+    err = MPI_Recv(&buffer, 3, MPI_UNSIGNED, heatsim->rank, MPI_ANY_TAG, heatsim->communicator, &status);
+    if (err != MPI_SUCCESS) {
+        LOG_ERROR("MPI_Recv width/height/padding failed");
+        goto fail_exit;
+    }
+
+    grid_t* grid = grid_create(buffer[0], buffer[1], buffer[2]);
+    
+    grid_data_t data;
+    err = MPI_Recv(&data, 1, grid_data_type, heatsim->rank, MPI_ANY_TAG, heatsim->communicator, &status);  
+    if (err != MPI_SUCCESS) {
+        LOG_ERROR("MPI_Recv grid_data_type failed");
+        goto fail_exit;
+    }
+
+    grid->data = data.data;
+    return grid;
 
 fail_exit:
     return NULL;
