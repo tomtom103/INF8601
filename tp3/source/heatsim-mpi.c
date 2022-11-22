@@ -8,8 +8,26 @@ typedef struct grid_data {
     double* data;
 } grid_data_t;
 
-MPI_Datatype grid_data_type;
+MPI_Datatype create_grid_data_type(int width, int height) {
+    int err;
+    int lengths[1] = {width * height};
+    MPI_Aint displacement[1] = {0};
+    MPI_Datatype grid_data_type;
 
+    MPI_Datatype types[1] = { MPI_DOUBLE };
+    
+    err = MPI_Type_create_struct(1, lengths, displacement, types, &grid_data_type);
+    if (err != MPI_SUCCESS) {
+        LOG_ERROR("MPI_Type_create_struct failed");
+        return -1;
+    }
+    err = MPI_Type_commit(&grid_data_type);
+    if (err != MPI_SUCCESS) {
+        LOG_ERROR("MPI_Type_commit failed");
+        return -1;
+    }
+    return grid_data_type;
+}
 
 int heatsim_init(heatsim_t* heatsim, unsigned int dim_x, unsigned int dim_y) {
     /*
@@ -61,25 +79,10 @@ int heatsim_init(heatsim_t* heatsim, unsigned int dim_x, unsigned int dim_y) {
         goto fail_exit;
     }
 
+    return 0;
+
 fail_exit:
     return -1;
-}
-
-void create_grid_data_type() {
-    int lengths[1] = {1};
-    MPI_Aint displacement[1];
-    MPI_Aint base_address;
-
-    grid_data_t grid_data;
-
-    MPI_Get_address(&grid_data, &base_address);
-    MPI_Get_address(&grid_data.data, &displacement[0]);
-
-    displacement[0] = MPI_Aint_diff(displacement[0], base_address);
-    MPI_Datatype types[1] = { MPI_DOUBLE };
-
-    MPI_Type_create_struct(1, lengths, displacement, types, &grid_data_type);
-    MPI_Type_commit(&grid_data_type);
 }
 
 int heatsim_send_grids(heatsim_t* heatsim, cart2d_t* cart) {
@@ -98,24 +101,33 @@ int heatsim_send_grids(heatsim_t* heatsim, cart2d_t* cart) {
 
     int err;
 
-    create_grid_data_type();
-
     for (int dest = 1; dest < heatsim->rank_count; dest++) {
-        grid_t* grid = cart2d_get_grid(cart, heatsim->coordinates[0] + dest, heatsim->coordinates[1] + dest);
+        int coords[2] = {
+            dest / cart->total_width,
+            dest % cart->total_width
+        };
+
+        grid_t* grid = cart2d_get_grid(cart, coords[0], coords[1]);
 
         unsigned buffer[3] = {grid->width, grid->height, grid->padding};
-        err = MPI_Send(buffer, 3, MPI_UNSIGNED, dest, MPI_ANY_TAG, heatsim->communicator);
+        err = MPI_Send(buffer, 3, MPI_UNSIGNED, dest, 0, MPI_COMM_WORLD);
         if (err != MPI_SUCCESS) {
             LOG_ERROR("MPI_Send width/height/padding failed");
             goto fail_exit;
         }
 
-        err = MPI_Send(grid, 1, grid_data_type, dest, MPI_ANY_TAG, heatsim->communicator);
+        MPI_Datatype grid_data_type = create_grid_data_type(grid->width, grid->height);
+
+        grid_data_t data = {grid->data};
+
+        err = MPI_Send(&data, 1, grid_data_type, dest, 0, MPI_COMM_WORLD);
         if (err != MPI_SUCCESS) {
             LOG_ERROR("MPI_Send grid_data_type failed");
             goto fail_exit;
         }
+        printf("%i\n", grid->width);
     }
+    return 0;
 
 fail_exit:
     return -1;
@@ -135,22 +147,29 @@ grid_t* heatsim_receive_grid(heatsim_t* heatsim) {
 
     MPI_Status status;
     unsigned buffer[3];
-    err = MPI_Recv(&buffer, 3, MPI_UNSIGNED, heatsim->rank, MPI_ANY_TAG, heatsim->communicator, &status);
+    err = MPI_Recv(buffer, 3, MPI_UNSIGNED, 0, 0, MPI_COMM_WORLD, &status);
     if (err != MPI_SUCCESS) {
         LOG_ERROR("MPI_Recv width/height/padding failed");
         goto fail_exit;
     }
 
     grid_t* grid = grid_create(buffer[0], buffer[1], buffer[2]);
-    
-    grid_data_t data;
-    err = MPI_Recv(&data, 1, grid_data_type, heatsim->rank, MPI_ANY_TAG, heatsim->communicator, &status);  
+
+    MPI_Datatype grid_data_type = create_grid_data_type(grid->width, grid->height);
+
+
+    grid_data_t* data = (grid_data_t*)malloc(sizeof(grid_data_t)*grid->width*grid->height);
+    // grid_data_t* data = NULL;
+    // changer le 1 pour la taille
+    LOG_ERROR("ALLO, %i", heatsim->rank);
+    err = MPI_Recv(data, 1, grid_data_type, 0, 0, MPI_COMM_WORLD, &status);  
     if (err != MPI_SUCCESS) {
         LOG_ERROR("MPI_Recv grid_data_type failed");
         goto fail_exit;
     }
 
-    grid->data = data.data;
+    printf("receive 2 %i", grid->height);
+    grid->data = data->data;
     return grid;
 
 fail_exit:
@@ -202,6 +221,7 @@ int heatsim_exchange_borders(heatsim_t* heatsim, grid_t* grid) {
      *
      *       Utilisez `grid_get_cell` pour obtenir un pointeur vers une cellule.
      */
+    return 0;
 
 fail_exit:
     return -1;
@@ -215,6 +235,8 @@ int heatsim_send_result(heatsim_t* heatsim, grid_t* grid) {
      *       `grid` n'a aucun rembourage (padding = 0);
      */
 
+    return 0;
+
 fail_exit:
     return -1;
 }
@@ -227,6 +249,7 @@ int heatsim_receive_results(heatsim_t* heatsim, cart2d_t* cart) {
      *       Utilisez `cart2d_get_grid` pour obtenir la `grid` à une coordonnée
      *       qui va recevoir le contenue (`data`) d'un autre noeud.
      */
+    return 0;
 
 fail_exit:
     return -1;
