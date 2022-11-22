@@ -11,6 +11,49 @@ int heatsim_init(heatsim_t* heatsim, unsigned int dim_x, unsigned int dim_y) {
      *       cartésien est périodique en X et Y.
      */
 
+    int err;
+
+    err = MPI_Comm_size(MPI_COMM_WORLD, &heatsim->rank_count);
+    if (err != MPI_SUCCESS) {
+        LOG_ERROR("MPI_Comm_size failed");
+        goto fail_exit;
+    }
+
+    err = MPI_Comm_rank(MPI_COMM_WORLD, &heatsim->rank);
+    if (err != MPI_SUCCESS) {
+        LOG_ERROR("MPI_Comm_rank failed");
+        goto fail_exit;
+    }
+
+    // Initialiser le communicateur cartésien
+    int dims[2] = {dim_x, dim_y};
+    int periods[2] = {1, 1};
+
+    err = MPI_Cart_create(MPI_COMM_WORLD, 2, dims, periods, 0, &heatsim->communicator);
+    if (err != MPI_SUCCESS) {
+        LOG_ERROR("MPI_Cart_create failed");
+        goto fail_exit;
+    }
+
+    // Initialiser les ranks
+    err = MPI_Cart_shift(heatsim->communicator, 0, 1, &heatsim->rank_west_peer, &heatsim->rank_east_peer);
+    if (err != MPI_SUCCESS) {
+        LOG_ERROR("MPI_Cart_shift W/E failed");
+        goto fail_exit;
+    }
+
+    err = MPI_Cart_shift(heatsim->communicator, 1, 1, &heatsim->rank_south_peer, &heatsim->rank_north_peer);
+    if (err != MPI_SUCCESS) {
+        LOG_ERROR("MPI_Cart_shift S/N failed");
+        goto fail_exit;
+    }
+
+    err = MPI_Cart_coords(heatsim->communicator, heatsim->rank, 2, heatsim->coordinates);
+    if (err != MPI_SUCCESS) {
+        LOG_ERROR("MPI_Cart_coords failed");
+        goto fail_exit;
+    }
+
 fail_exit:
     return -1;
 }
