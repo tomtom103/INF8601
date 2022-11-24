@@ -110,13 +110,13 @@ int heatsim_send_grids(heatsim_t* heatsim, cart2d_t* cart) {
         grid_t* grid = cart2d_get_grid(cart, coords[0], coords[1]);
 
         unsigned buffer[3] = {grid->width, grid->height, grid->padding};
-        err = MPI_Send(buffer, 3, MPI_UNSIGNED, dest, dest, heatsim->communicator);
+        err = MPI_Send(buffer, 3, MPI_UNSIGNED, dest, dest, MPI_COMM_WORLD);
         if (err != MPI_SUCCESS) {
             LOG_ERROR("MPI_Send width/height/padding failed");
             goto fail_exit;
         }
 
-        err = MPI_Send(grid->data, grid->width*grid->height, grid_data_type, dest, dest, heatsim->communicator);
+        err = MPI_Send(grid->data, grid->width*grid->height, grid_data_type, dest, dest, MPI_COMM_WORLD);
         if (err != MPI_SUCCESS) {
             LOG_ERROR("MPI_Send grid_data_type failed");
             goto fail_exit;
@@ -143,7 +143,7 @@ grid_t* heatsim_receive_grid(heatsim_t* heatsim) {
     MPI_Status status;
 
     unsigned buffer[3];
-    err = MPI_Recv(buffer, 3, MPI_UNSIGNED, 0, heatsim->rank, heatsim->communicator, &status);
+    err = MPI_Recv(buffer, 3, MPI_UNSIGNED, 0, heatsim->rank, MPI_COMM_WORLD, &status);
     if (err != MPI_SUCCESS) {
         LOG_ERROR("MPI_Recv width/height/padding failed");
         goto fail_exit;
@@ -151,7 +151,7 @@ grid_t* heatsim_receive_grid(heatsim_t* heatsim) {
 
     grid_t* grid = grid_create(buffer[0], buffer[1], buffer[2]);
     
-    err = MPI_Recv(grid->data, grid->width*grid->height, grid_data_type, 0, heatsim->rank, heatsim->communicator, &status);  
+    err = MPI_Recv(grid->data, grid->width*grid->height, grid_data_type, 0, heatsim->rank, MPI_COMM_WORLD, &status);  
     if (err != MPI_SUCCESS) {
         LOG_ERROR("MPI_Recv grid_data_type failed");
         goto fail_exit;
@@ -208,6 +208,79 @@ int heatsim_exchange_borders(heatsim_t* heatsim, grid_t* grid) {
      *
      *       Utilisez `grid_get_cell` pour obtenir un pointeur vers une cellule.
      */
+
+    MPI_Request request[2];
+    int err;
+
+    // Send north and receive south
+    err = MPI_Isend(grid_get_cell(grid, 0, 0), grid->width, MPI_DOUBLE, heatsim->rank_south_peer, heatsim->rank, heatsim->communicator, &request[0]);
+    if (err != MPI_SUCCESS) {
+        LOG_ERROR("MPI_ISend north failed");
+        goto fail_exit;
+    }
+
+    err = MPI_Irecv(grid_get_cell(grid, 0, grid->height), grid->width, MPI_DOUBLE, heatsim->rank_north_peer, heatsim->rank_north_peer, heatsim->communicator, &request[1]);
+    if (err != MPI_SUCCESS) {
+        LOG_ERROR("MPI_Irecv south failed");
+        goto fail_exit;
+    }
+
+    err = MPI_Wait(&request[0], MPI_STATUS_IGNORE);
+    err = MPI_Wait(&request[1], MPI_STATUS_IGNORE);
+
+    // Send south and receive north
+    err = MPI_Isend(grid_get_cell(grid, 0, grid->height - 1), grid->width, MPI_DOUBLE, heatsim->rank_north_peer, heatsim->rank, heatsim->communicator, &request[0]);
+    if (err != MPI_SUCCESS) {
+        LOG_ERROR("MPI_ISend south failed");
+        goto fail_exit;
+    }
+
+    err = MPI_Irecv(grid_get_cell(grid, 0, -1), grid->width, MPI_DOUBLE, heatsim->rank_south_peer, heatsim->rank_south_peer, heatsim->communicator, &request[1]);
+    if (err != MPI_SUCCESS) {
+        LOG_ERROR("MPI_Irecv north failed");
+        goto fail_exit;
+    }
+
+    err = MPI_Wait(&request[0], MPI_STATUS_IGNORE);
+    err = MPI_Wait(&request[1], MPI_STATUS_IGNORE);
+
+    // Vector type for east and west
+    MPI_Datatype border_vector;
+    MPI_Type_vector(grid->height, 1, grid->width_padded, MPI_DOUBLE, &border_vector);
+    MPI_Type_commit(&border_vector);
+
+    // Send west and receive east
+    err = MPI_Isend(grid_get_cell(grid, 0, 0), 1, border_vector, heatsim->rank_west_peer, heatsim->rank, heatsim->communicator, &request[0]);
+    if (err != MPI_SUCCESS) {
+        LOG_ERROR("MPI_ISend west failed");
+        goto fail_exit;
+    }
+
+    err = MPI_Irecv(grid_get_cell(grid, grid->width, 0), 1, border_vector, heatsim->rank_east_peer, heatsim->rank_east_peer, heatsim->communicator, &request[1]);
+    if (err != MPI_SUCCESS) {
+        LOG_ERROR("MPI_Irecv east failed");
+        goto fail_exit;
+    }
+
+    err = MPI_Wait(&request[0], MPI_STATUS_IGNORE);
+    err = MPI_Wait(&request[1], MPI_STATUS_IGNORE);
+
+    // Send east and receive west
+    err = MPI_Isend(grid_get_cell(grid, grid->width-1, 0), 1, border_vector, heatsim->rank_east_peer, heatsim->rank, heatsim->communicator, &request[0]);
+    if (err != MPI_SUCCESS) {
+        LOG_ERROR("MPI_ISend east failed");
+        goto fail_exit;
+    }
+
+    err = MPI_Irecv(grid_get_cell(grid, -1, 0), 1, border_vector, heatsim->rank_west_peer, heatsim->rank_west_peer, heatsim->communicator, &request[1]);
+    if (err != MPI_SUCCESS) {
+        LOG_ERROR("MPI_Irecv west failed");
+        goto fail_exit;
+    }
+
+    err = MPI_Wait(&request[0], MPI_STATUS_IGNORE);
+    err = MPI_Wait(&request[1], MPI_STATUS_IGNORE);
+
     return 0;
 
 fail_exit:
@@ -221,6 +294,19 @@ int heatsim_send_result(heatsim_t* heatsim, grid_t* grid) {
      * TODO: Envoyer les données (`data`) du `grid` résultant au rang 0. Le
      *       `grid` n'a aucun rembourage (padding = 0);
      */
+    MPI_Request request;
+    int err;
+    err = MPI_Isend(grid->data, grid->height * grid->width, grid_data_type, 0, heatsim->rank, MPI_COMM_WORLD, &request);
+    if (err != MPI_SUCCESS) {
+        LOG_ERROR("MPI_Isend to rank 0 failed");
+        goto fail_exit;
+    }
+
+    err = MPI_Wait(&request, MPI_STATUS_IGNORE);
+    if (err != MPI_SUCCESS) {
+        LOG_ERROR("MPI_Wait failed");
+        goto fail_exit;
+    }
 
     return 0;
 
@@ -236,6 +322,23 @@ int heatsim_receive_results(heatsim_t* heatsim, cart2d_t* cart) {
      *       Utilisez `cart2d_get_grid` pour obtenir la `grid` à une coordonnée
      *       qui va recevoir le contenue (`data`) d'un autre noeud.
      */
+    
+    MPI_Request request;
+    int err;
+    for(int origin = 1; origin < heatsim->rank_count; origin++) {
+        int coords[2];
+        err = MPI_Cart_coords(heatsim->communicator, origin, 2, coords);
+
+        grid_t* grid = cart2d_get_grid(cart, coords[0], coords[1]);
+        err = MPI_Irecv(grid->data, grid->width * grid->height, grid_data_type, origin, origin, MPI_COMM_WORLD, &request);
+        if (err != MPI_SUCCESS) {
+            LOG_ERROR("MPI_Irecv failed");
+            goto fail_exit;
+        }
+
+        err = MPI_Wait(&request, MPI_STATUS_IGNORE);
+    }
+
     return 0;
 
 fail_exit:
